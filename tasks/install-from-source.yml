@@ -1,0 +1,78 @@
+---
+- name: Ensure redis3m's dependencies are installed (Debian).
+  apt: "pkg={{ item }} state=installed"
+  with_items:
+    - gcc
+    - make
+    - libc6-dev
+    - g++
+    - cmake
+    - libmsgpack-dev
+    - build-essential
+  when: ansible_os_family == 'Debian'
+
+- name: Get installed version
+  shell: "test -e {{ cpp_rapidjson_install_path }}/lib/libredis3m.so.{{ cpp_redis3m_version }} && echo {{ cpp_redis3m_version }} || echo 0.0.1"
+  changed_when: false
+  failed_when: false
+  register: redis3m_installed_version
+
+- name: Force redis3m install if the version numbers do not match
+  set_fact:
+    cpp_redis3m_reinstall_from_source: true
+  when: 'cpp_redis3m_install_from_source_force_update and (redis3m_installed_version|success and (redis3m_installed_version.stdout | regex_replace("^.*?([0-9\.]+)$", "\\1") | version_compare(cpp_redis3m_version, operator="!=")))'
+
+- name: Download redis3m.
+  get_url:
+    url: "https://github.com/luca3m/redis3m/archive/{{ cpp_redis3m_github_branch }}.tar.gz"
+    dest: "{{ workspace }}/redis3m-{{ cpp_redis3m_github_archive }}.tar.gz"
+  when: redis3m_installed_version|failed or cpp_redis3m_reinstall_from_source
+
+- name: Expand redis3m archive.
+  unarchive:
+    src: "{{ workspace }}/redis3m-{{ cpp_redis3m_github_archive }}.tar.gz"
+    dest: "{{ workspace }}"
+    creates: "{{ workspace }}/redis3m-{{ cpp_redis3m_github_archive }}/README.md"
+    copy: no
+  when: redis3m_installed_version|failed or cpp_redis3m_reinstall_from_source
+
+- name: Mkdir build directory.
+  file:
+    path: "{{ workspace }}/redis3m-{{ cpp_redis3m_github_archive }}/build"
+    state: directory
+    owner: "root"
+    group: "root"
+    mode: 0750
+  when: redis3m_installed_version|failed or cpp_redis3m_reinstall_from_source
+
+- name: Add CMAKE_CXX_FLAGS to CMakeLists.txt
+  lineinfile:
+    dest: "{{ workspace }}/redis3m-{{ cpp_redis3m_github_archive }}/CMakeLists.txt"
+    regexp: "CMAKE_CXX_FLAGS "
+    insertbefore: "CMAKE_CXX_FLAGS_DEBUG "
+    line: "set(CMAKE_CXX_FLAGS \"-pthread\")"
+    state: present
+  when: redis3m_installed_version|failed or cpp_redis3m_reinstall_from_source
+  become: yes
+
+- name: Build redis3m with cmake.
+  command: >
+    cmake -DCMAKE_INSTALL_PREFIX={{ cpp_redis3m_install_path }} .
+    chdir={{ workspace }}/redis3m-{{ cpp_redis3m_github_archive }}
+  when: redis3m_installed_version|failed or cpp_redis3m_reinstall_from_source
+  become: yes
+
+- name: Build redis3m.
+  command: >
+    make {{ item }}
+    chdir={{ workspace }}/redis3m-{{ cpp_redis3m_github_archive }}
+  with_items:
+    - all
+    - install
+  when: redis3m_installed_version|failed or cpp_redis3m_reinstall_from_source
+  become: yes
+
+- name: Run ldconfig
+  shell: ldconfig
+  when: redis3m_installed_version|failed or cpp_redis3m_reinstall_from_source
+  become: yes
